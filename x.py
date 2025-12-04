@@ -13,7 +13,7 @@ from selenium.webdriver.common.keys import Keys
 # https://x.com/i/flow/login
 # bot.sannysoft.com
 # ===========================================
-ACCOUNT_LINE = 2  # Which line to use (1 = first line)
+ACCOUNT_LINE = 21  # Which line to use (1 = first line)
 # ===========================================
 
 # File paths
@@ -77,6 +77,10 @@ PROXY_HOST = proxy_info['host']
 PROXY_PORT = proxy_info['port']
 PROXY_USER = proxy_info['username']
 PROXY_PASS = proxy_info['password']
+
+# Global tab handles for confirmation code
+outlook_tab_handle = None
+x_tab_handle = None
 
 
 def get_profile_dir(email):
@@ -182,14 +186,133 @@ def human_type(element, text, min_delay=0.08, max_delay=0.18):
         time.sleep(random.uniform(min_delay, max_delay))
 
 
+def get_confirmation_code_from_outlook(driver, outlook_tab, x_tab):
+    """Switch to Outlook, find X confirmation email, extract code, return to X."""
+    import re
+    
+    print("\n" + "=" * 50)
+    print("GETTING CONFIRMATION CODE FROM OUTLOOK")
+    print("=" * 50)
+    
+    # Switch to Outlook tab
+    print("[*] Switching to Outlook inbox...")
+    driver.switch_to.window(outlook_tab)
+    time.sleep(2)
+    
+    # Refresh inbox to get new emails
+    print("[*] Refreshing inbox...")
+    driver.refresh()
+    time.sleep(5)
+    
+    confirmation_code = None
+    max_attempts = 2  # Only try 2 times, then manual
+    
+    for attempt in range(max_attempts):
+        print(f"[*] Looking for X confirmation email... (attempt {attempt + 1}/{max_attempts})")
+        
+        try:
+            # Look for email from X with "confirmation code" in title
+            email_selectors = [
+                "//span[contains(text(),'confirmation code')]",
+                "//span[contains(text(),'Your X confirmation')]",
+                "//span[contains(text(),'X confirmation code')]",
+                "//div[contains(text(),'confirmation code')]",
+            ]
+            
+            email_found = False
+            for selector in email_selectors:
+                try:
+                    emails = driver.find_elements(By.XPATH, selector)
+                    if emails:
+                        print(f"[*] Found X confirmation email, clicking...")
+                        emails[0].click()
+                        time.sleep(3)
+                        email_found = True
+                        break
+                except:
+                    continue
+            
+            if not email_found:
+                # Try clicking the first/newest email in inbox
+                try:
+                    # Click on first email item
+                    first_email = driver.find_element(By.CSS_SELECTOR, '[role="option"]')
+                    first_email.click()
+                    time.sleep(3)
+                    email_found = True
+                except:
+                    pass
+            
+            if email_found:
+                # Try to extract alphanumeric code from email
+                try:
+                    # Get email body text
+                    page_text = driver.find_element(By.TAG_NAME, 'body').text
+                    print(f"[*] Searching for code in email...")
+                    
+                    # Pattern 1: "confirmation code is XXXXXXXX" (alphanumeric 8 chars)
+                    code_match = re.search(r'confirmation code is\s+([a-z0-9]{8})', page_text, re.IGNORECASE)
+                    if code_match:
+                        confirmation_code = code_match.group(1)
+                        print(f"[+] Found confirmation code: {confirmation_code}")
+                        break
+                    
+                    # Pattern 2: Standalone 8-char alphanumeric code on its own line
+                    code_match = re.search(r'\n([a-z0-9]{8})\n', page_text, re.IGNORECASE)
+                    if code_match:
+                        confirmation_code = code_match.group(1)
+                        print(f"[+] Found confirmation code: {confirmation_code}")
+                        break
+                    
+                    # Pattern 3: Any 8-char lowercase alphanumeric that looks like a code
+                    code_match = re.search(r'\b([a-z][a-z0-9]{7})\b', page_text)
+                    if code_match:
+                        confirmation_code = code_match.group(1)
+                        print(f"[+] Found confirmation code: {confirmation_code}")
+                        break
+                    
+                    # Pattern 4: 6-digit numeric code (fallback)
+                    code_match = re.search(r'\b(\d{6})\b', page_text)
+                    if code_match:
+                        confirmation_code = code_match.group(1)
+                        print(f"[+] Found confirmation code: {confirmation_code}")
+                        break
+                        
+                except Exception as e:
+                    print(f"[!] Error reading email body: {e}")
+            
+            # If code not found, refresh and try again
+            if not confirmation_code and attempt < max_attempts - 1:
+                print("[*] Code not found, refreshing inbox...")
+                driver.refresh()
+                time.sleep(5)
+                
+        except Exception as e:
+            print(f"[!] Error searching for email: {e}")
+            time.sleep(3)
+    
+    # Switch back to X tab
+    print("[*] Switching back to X tab...")
+    driver.switch_to.window(x_tab)
+    time.sleep(2)
+    
+    if not confirmation_code:
+        print("[!] Could not find confirmation code after 2 attempts")
+        print("[!] Please enter the code manually on X")
+    
+    return confirmation_code
+
+
 def login_x(driver, email, password):
     """Login to X (Twitter) with credentials in a new tab."""
+    global outlook_tab_handle, x_tab_handle  # Store for confirmation code retrieval
+    
     print("\n" + "=" * 50)
     print("STEP 2: X (Twitter) Login")
     print("=" * 50)
     
     # Store original window handle (Outlook tab)
-    outlook_tab = driver.current_window_handle
+    outlook_tab_handle = driver.current_window_handle
     original_tabs = len(driver.window_handles)
     print(f"[*] Outlook tab stored")
     print(f"[*] Current tabs: {original_tabs}")
@@ -206,8 +329,8 @@ def login_x(driver, email, password):
     if len(driver.window_handles) > original_tabs:
         # Switch to the new tab
         all_handles = driver.window_handles
-        new_tab = [h for h in all_handles if h != outlook_tab][0]
-        driver.switch_to.window(new_tab)
+        x_tab_handle = [h for h in all_handles if h != outlook_tab_handle][0]
+        driver.switch_to.window(x_tab_handle)
         print(f"[*] Switched to new tab")
         driver.get("https://x.com/i/flow/login")
     else:
@@ -217,13 +340,14 @@ def login_x(driver, email, password):
         time.sleep(1)
         if len(driver.window_handles) > original_tabs:
             all_handles = driver.window_handles
-            new_tab = [h for h in all_handles if h != outlook_tab][0]
-            driver.switch_to.window(new_tab)
+            x_tab_handle = [h for h in all_handles if h != outlook_tab_handle][0]
+            driver.switch_to.window(x_tab_handle)
             driver.get("https://x.com/i/flow/login")
             print(f"[*] Switched to new tab")
         else:
             # Last fallback: navigate in same tab
             print("[!] Could not open new tab, navigating in same tab...")
+            x_tab_handle = outlook_tab_handle  # Same tab
             driver.get("https://x.com/i/flow/login")
     
     time.sleep(5)
@@ -295,6 +419,7 @@ def login_x(driver, email, password):
         
         if "x.com/home" in current_url:
             print("[+] X login successful!")
+            handle_x_post_login_prompts(driver)
             return True
         
         # Check for confirmation code required
@@ -302,13 +427,54 @@ def login_x(driver, email, password):
             code_text = driver.find_element(By.XPATH, "//*[contains(text(),'confirmation code')]")
             if code_text:
                 print("[!] X requires confirmation code from email")
-                print("[!] Please check Outlook inbox and enter code manually...")
-                # Wait for user to enter code
-                WebDriverWait(driver, 180).until(
-                    lambda d: "x.com/home" in d.current_url
+                
+                # Get code from Outlook automatically
+                confirmation_code = get_confirmation_code_from_outlook(
+                    driver, outlook_tab_handle, x_tab_handle
                 )
-                print("[+] X login successful after code entry!")
-                return True
+                
+                if confirmation_code:
+                    print(f"[*] Entering confirmation code: {confirmation_code}")
+                    
+                    # Find code input field
+                    try:
+                        code_input = WebDriverWait(driver, 10).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[data-testid="ocfEnterTextTextInput"]'))
+                        )
+                        code_input.click()
+                        time.sleep(0.5)
+                        human_type(code_input, confirmation_code)
+                        time.sleep(1)
+                        
+                        # Click Next/Verify button
+                        try:
+                            next_btn = driver.find_element(By.XPATH, "//span[text()='Next']/ancestor::button")
+                            next_btn.click()
+                        except:
+                            try:
+                                verify_btn = driver.find_element(By.XPATH, "//span[text()='Verify']/ancestor::button")
+                                verify_btn.click()
+                            except:
+                                code_input.send_keys(Keys.ENTER)
+                        
+                        time.sleep(5)
+                        
+                        if "x.com/home" in driver.current_url:
+                            print("[+] X login successful after code entry!")
+                            handle_x_post_login_prompts(driver)
+                            return True
+                            
+                    except Exception as e:
+                        print(f"[!] Error entering code: {e}")
+                else:
+                    print("[!] Could not get code automatically")
+                    print("[!] Please enter code manually...")
+                    WebDriverWait(driver, 180).until(
+                        lambda d: "x.com/home" in d.current_url
+                    )
+                    print("[+] X login successful after manual code entry!")
+                    handle_x_post_login_prompts(driver)
+                    return True
         except:
             pass
         
@@ -324,10 +490,52 @@ def login_x(driver, email, password):
     # Final check
     if "x.com/home" in driver.current_url:
         print("[+] X login successful!")
+        handle_x_post_login_prompts(driver)
         return True
     
     print("[!] X login may have failed. Current URL:", driver.current_url)
     return False
+
+
+def handle_x_post_login_prompts(driver):
+    """Handle post-login prompts on X like 'Review your email' and 'Accept cookies'."""
+    print("[*] Checking for post-login prompts...")
+    
+    for _ in range(5):
+        time.sleep(2)
+        
+        # Handle "Review your email" - Click "Yes, that's correct"
+        try:
+            yes_correct = driver.find_element(By.XPATH, "//span[contains(text(),\"Yes, that's correct\")]/ancestor::button")
+            print("[*] Found 'Review your email' prompt, clicking 'Yes, that's correct'...")
+            yes_correct.click()
+            time.sleep(2)
+        except:
+            pass
+        
+        # Handle "Accept all cookies"
+        try:
+            accept_cookies = driver.find_element(By.XPATH, "//span[contains(text(),'Accept all cookies')]/ancestor::button")
+            print("[*] Found cookie prompt, clicking 'Accept all cookies'...")
+            accept_cookies.click()
+            time.sleep(2)
+        except:
+            pass
+        
+        # Alternative cookie button selector
+        try:
+            accept_cookies = driver.find_element(By.XPATH, "//div[contains(text(),'Accept all cookies')]")
+            print("[*] Found cookie prompt, clicking 'Accept all cookies'...")
+            accept_cookies.click()
+            time.sleep(2)
+        except:
+            pass
+        
+        # Check if we're on home page now
+        if "x.com/home" in driver.current_url:
+            break
+    
+    print("[*] Post-login prompts handled")
 
 
 def wait_for_x_login_and_get_cookies(driver, outlook_email):
