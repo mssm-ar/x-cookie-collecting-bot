@@ -13,7 +13,7 @@ from selenium.webdriver.common.keys import Keys
 # https://x.com/i/flow/login
 # bot.sannysoft.com
 # ===========================================
-ACCOUNT_LINE = 2  # Which line to use (1 = first line)
+ACCOUNT_LINE = 4  # Which line to use (1 = first line)
 # ===========================================
 
 # File paths
@@ -681,10 +681,96 @@ def main():
     profile_dir = get_profile_dir(OUTLOOK_EMAIL, ACCOUNT_LINE)
     print(f"[*] Profile directory: {profile_dir}")
     
-    # Configure Chrome options
+    # Start local proxy forwarder (handles auth automatically)
+    import subprocess
+    import threading
+    import socket
+    import base64
+    
+    LOCAL_PROXY_PORT = 8888
+    
+    def start_proxy_forwarder():
+        """Start local proxy forwarder in background."""
+        
+        def create_proxy_auth_header():
+            credentials = f"{PROXY_USER}:{PROXY_PASS}"
+            encoded = base64.b64encode(credentials.encode()).decode()
+            return f"Proxy-Authorization: Basic {encoded}\r\n"
+        
+        def handle_client(client_socket):
+            try:
+                remote_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                remote_socket.settimeout(30)
+                remote_socket.connect((PROXY_HOST, int(PROXY_PORT)))
+                
+                request = client_socket.recv(65536)
+                if not request:
+                    return
+                
+                # Inject auth header
+                request_str = request.decode('utf-8', errors='ignore')
+                first_line_end = request_str.find('\r\n')
+                if first_line_end > 0:
+                    modified_request = (
+                        request_str[:first_line_end + 2] +
+                        create_proxy_auth_header() +
+                        request_str[first_line_end + 2:]
+                    )
+                    remote_socket.send(modified_request.encode())
+                else:
+                    remote_socket.send(request)
+                
+                def forward(src, dst):
+                    try:
+                        while True:
+                            data = src.recv(65536)
+                            if not data:
+                                break
+                            dst.send(data)
+                    except:
+                        pass
+                
+                t1 = threading.Thread(target=forward, args=(client_socket, remote_socket), daemon=True)
+                t2 = threading.Thread(target=forward, args=(remote_socket, client_socket), daemon=True)
+                t1.start()
+                t2.start()
+                t1.join(timeout=60)
+                
+            except Exception as e:
+                pass
+            finally:
+                try:
+                    client_socket.close()
+                except:
+                    pass
+        
+        def run_server():
+            server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                server.bind(('127.0.0.1', LOCAL_PROXY_PORT))
+                server.listen(100)
+                print(f"[+] Local proxy forwarder started on 127.0.0.1:{LOCAL_PROXY_PORT}")
+                print(f"[+] Forwarding to {PROXY_HOST}:{PROXY_PORT} with auth")
+                
+                while True:
+                    client_socket, addr = server.accept()
+                    thread = threading.Thread(target=handle_client, args=(client_socket,), daemon=True)
+                    thread.start()
+            except Exception as e:
+                print(f"[!] Proxy forwarder error: {e}")
+        
+        server_thread = threading.Thread(target=run_server, daemon=True)
+        server_thread.start()
+        time.sleep(1)  # Wait for server to start
+    
+    # Start local proxy forwarder
+    start_proxy_forwarder()
+    
+    # Configure Chrome options - use LOCAL proxy (no auth needed)
     options = uc.ChromeOptions()
     options.add_argument(f'--user-data-dir={profile_dir}')
-    options.add_argument(f'--proxy-server=http://{PROXY_HOST}:{PROXY_PORT}')
+    options.add_argument(f'--proxy-server=http://127.0.0.1:{LOCAL_PROXY_PORT}')
     options.add_argument('--no-first-run')
     options.add_argument('--no-service-autorun')
     options.add_argument('--password-store=basic')
@@ -692,13 +778,6 @@ def main():
     options.add_argument('--disable-software-rasterizer')
     options.add_argument('--enable-webgl')
     options.add_argument('--ignore-gpu-blocklist')
-    
-    # Create proxy auth extension
-    proxy_auth_extension = create_proxy_auth_extension(
-        PROXY_HOST, PROXY_PORT, PROXY_USER, PROXY_PASS
-    )
-    if proxy_auth_extension:
-        options.add_extension(proxy_auth_extension)
     
     print("[*] Launching Chrome with undetected-chromedriver...")
     driver = uc.Chrome(options=options, version_main=None)
