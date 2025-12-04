@@ -10,6 +10,8 @@ from selenium.webdriver.common.keys import Keys
 
 # ===========================================
 # CONFIGURATION - Change line number here
+# https://x.com/i/flow/login
+# bot.sannysoft.com
 # ===========================================
 ACCOUNT_LINE = 2  # Which line to use (1 = first line)
 # ===========================================
@@ -173,21 +175,141 @@ def login_outlook(driver, email, password):
     return False
 
 
-def wait_for_x_login_and_get_cookies(driver, outlook_email):
-    """Wait for manual X login, then get cookies."""
+def human_type(element, text, min_delay=0.08, max_delay=0.18):
+    """Type text with human-like delays."""
+    for char in text:
+        element.send_keys(char)
+        time.sleep(random.uniform(min_delay, max_delay))
+
+
+def login_x(driver, email, password):
+    """Login to X (Twitter) with credentials in a new tab."""
     print("\n" + "=" * 50)
-    print("STEP 2: X (Twitter) Login (MANUAL)")
+    print("STEP 2: X (Twitter) Login")
     print("=" * 50)
-    print("[!] Please open X in browser and login manually")
-    print("[!] Script will detect when you're logged in")
-    print("[!] Then automatically extract cookies")
-    print("=" * 50)
+    
+    # Open new tab for X login (keep Outlook open)
+    print("[*] Opening new tab for X login...")
+    driver.execute_script("window.open('about:blank', '_blank');")
+    time.sleep(1)
+    
+    # Switch to new tab
+    driver.switch_to.window(driver.window_handles[-1])
+    print("[*] Switched to new tab")
+    
+    print("[*] Navigating to X login page...")
+    driver.get("https://x.com/i/flow/login")
+    time.sleep(5)
+    
+    # Enter email/username
+    print(f"[*] Entering email: {email}")
+    try:
+        # Wait for username/email field
+        email_field = WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[autocomplete="username"]'))
+        )
+        time.sleep(random.uniform(1, 2))
+        email_field.click()
+        time.sleep(random.uniform(0.5, 1))
+        human_type(email_field, email)
+        time.sleep(random.uniform(1, 2))
+        
+        # Click Next button
+        print("[*] Clicking Next button...")
+        next_button = driver.find_element(By.XPATH, "//span[text()='Next']/ancestor::button")
+        next_button.click()
+        time.sleep(random.uniform(3, 5))
+        
+    except Exception as e:
+        print(f"[!] Error entering email: {e}")
+        return False
+    
+    # Check if verification needed (unusual activity - asks for username/phone)
+    try:
+        verify_field = driver.find_element(By.CSS_SELECTOR, 'input[data-testid="ocfEnterTextTextInput"]')
+        if verify_field:
+            print("[!] X is asking for verification (phone/username)")
+            print("[!] Please complete verification manually, then script will continue...")
+            # Wait for user to complete verification
+            WebDriverWait(driver, 120).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]'))
+            )
+    except:
+        pass
+    
+    # Enter password
+    print("[*] Waiting for password field...")
+    try:
+        password_field = WebDriverWait(driver, 30).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="password"]'))
+        )
+        time.sleep(random.uniform(1, 2))
+        password_field.click()
+        time.sleep(random.uniform(0.5, 1))
+        human_type(password_field, password)
+        time.sleep(random.uniform(1, 2))
+        
+        # Click Login button
+        print("[*] Clicking Login button...")
+        login_button = driver.find_element(By.XPATH, "//span[text()='Log in']/ancestor::button")
+        login_button.click()
+        time.sleep(random.uniform(5, 7))
+        
+    except Exception as e:
+        print(f"[!] Error entering password: {e}")
+        return False
+    
+    # Check if login successful
+    print("[*] Checking login status...")
+    for i in range(15):
+        time.sleep(2)
+        current_url = driver.current_url
+        print(f"[*] Current URL: {current_url}")
+        
+        if "x.com/home" in current_url:
+            print("[+] X login successful!")
+            return True
+        
+        # Check for confirmation code required
+        try:
+            code_text = driver.find_element(By.XPATH, "//*[contains(text(),'confirmation code')]")
+            if code_text:
+                print("[!] X requires confirmation code from email")
+                print("[!] Please check Outlook inbox and enter code manually...")
+                # Wait for user to enter code
+                WebDriverWait(driver, 180).until(
+                    lambda d: "x.com/home" in d.current_url
+                )
+                print("[+] X login successful after code entry!")
+                return True
+        except:
+            pass
+        
+        # Check for wrong password
+        try:
+            error = driver.find_element(By.XPATH, "//*[contains(text(),'Wrong password')]")
+            if error:
+                print("[!] Wrong password!")
+                return False
+        except:
+            pass
+    
+    # Final check
+    if "x.com/home" in driver.current_url:
+        print("[+] X login successful!")
+        return True
+    
+    print("[!] X login may have failed. Current URL:", driver.current_url)
+    return False
+
+
+def wait_for_x_login_and_get_cookies(driver, outlook_email):
+    """Wait for X login to complete, then get cookies."""
+    print("\n[*] Waiting for X login to complete...")
     
     max_wait = 300  # 5 minutes
     check_interval = 2
     waited = 0
-    
-    print("\n[*] Waiting for X login...")
     
     while waited < max_wait:
         current_url = driver.current_url
@@ -330,14 +452,27 @@ def main():
         if outlook_success:
             time.sleep(2)
             
-            # Step 2: Wait for X login and get cookies
-            cookies = wait_for_x_login_and_get_cookies(driver, OUTLOOK_EMAIL)
+            # Step 2: Login to X automatically
+            x_success = login_x(driver, OUTLOOK_EMAIL, X_PASSWORD)
             
-            if cookies:
-                print("\n" + "=" * 50)
-                print("[+] ALL DONE!")
-                print(f"[+] Extracted {len(cookies)} X cookies")
-                print("=" * 50)
+            if x_success:
+                # Step 3: Extract cookies
+                time.sleep(3)
+                cookies = get_x_cookies(driver, OUTLOOK_EMAIL)
+                
+                if cookies:
+                    print("\n" + "=" * 50)
+                    print("[+] ALL DONE!")
+                    print(f"[+] Extracted {len(cookies)} X cookies")
+                    print("=" * 50)
+            else:
+                print("\n[!] X login failed. You can try manually...")
+                cookies = wait_for_x_login_and_get_cookies(driver, OUTLOOK_EMAIL)
+                if cookies:
+                    print("\n" + "=" * 50)
+                    print("[+] ALL DONE!")
+                    print(f"[+] Extracted {len(cookies)} X cookies")
+                    print("=" * 50)
         
         print("\n[*] Browser will stay open. Press Ctrl+C to close.")
         while True:
