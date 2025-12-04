@@ -188,17 +188,44 @@ def login_x(driver, email, password):
     print("STEP 2: X (Twitter) Login")
     print("=" * 50)
     
-    # Open new tab for X login (keep Outlook open)
+    # Store original window handle (Outlook tab)
+    outlook_tab = driver.current_window_handle
+    original_tabs = len(driver.window_handles)
+    print(f"[*] Outlook tab stored")
+    print(f"[*] Current tabs: {original_tabs}")
+    
+    # Open new tab using Selenium method
     print("[*] Opening new tab for X login...")
-    driver.execute_script("window.open('about:blank', '_blank');")
-    time.sleep(1)
     
-    # Switch to new tab
-    driver.switch_to.window(driver.window_handles[-1])
-    print("[*] Switched to new tab")
+    # Use Ctrl+T to open new tab (works with Selenium)
+    body = driver.find_element(By.TAG_NAME, 'body')
+    body.send_keys(Keys.CONTROL + 't')
+    time.sleep(2)
     
-    print("[*] Navigating to X login page...")
-    driver.get("https://x.com/i/flow/login")
+    # Check if new tab opened
+    if len(driver.window_handles) > original_tabs:
+        # Switch to the new tab
+        all_handles = driver.window_handles
+        new_tab = [h for h in all_handles if h != outlook_tab][0]
+        driver.switch_to.window(new_tab)
+        print(f"[*] Switched to new tab")
+        driver.get("https://x.com/i/flow/login")
+    else:
+        # Fallback: Try execute_script
+        print("[*] Trying alternative method...")
+        driver.execute_script("window.open('');")
+        time.sleep(1)
+        if len(driver.window_handles) > original_tabs:
+            all_handles = driver.window_handles
+            new_tab = [h for h in all_handles if h != outlook_tab][0]
+            driver.switch_to.window(new_tab)
+            driver.get("https://x.com/i/flow/login")
+            print(f"[*] Switched to new tab")
+        else:
+            # Last fallback: navigate in same tab
+            print("[!] Could not open new tab, navigating in same tab...")
+            driver.get("https://x.com/i/flow/login")
+    
     time.sleep(5)
     
     # Enter email/username
